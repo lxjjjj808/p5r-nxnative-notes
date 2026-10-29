@@ -1,0 +1,44 @@
+--- a/dm/ios/Sources/main.m
++++ b/dm/ios/Sources/main.m
+@@ -1,6 +1,7 @@
+ // iOS App entry: set the environment (game files, saves, shader libraries), write the host log to Documents/log.txt, create the window (front_ios.m), then run the host's dm_main on a big-stack thread.
+ // The game files (RomFS) ship inside the App at <App>/romfs; Documents/romfs placed through the Files app is also accepted (lets you swap them without reinstalling).
+ #import <UIKit/UIKit.h>
++#import "DmLaunchSettings.h"
+ #include <pthread.h>
+ #include <signal.h>
+ #include <stdio.h>
+@@ -37,6 +38,8 @@
+     NSString *log = [doc stringByAppendingPathComponent:@"log.txt"], *prev = [doc stringByAppendingPathComponent:@"log.prev.txt"];
+     [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:log toPath:prev error:nil];
+     if (freopen(log.fileSystemRepresentation, "w", stderr)) setvbuf(stderr, NULL, _IOLBF, 0);
++    NSString *buildLabel = [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMBuildLabel"];
++    if ([buildLabel isKindOfClass:NSString.class] && buildLabel.length) fprintf(stderr, "boot: host build %s\n", buildLabel.UTF8String);
+     // Environment switch files (for on-device diagnostics: a sideloaded app cannot be given environment variables from outside): one KEY=VALUE per line, # starts a comment; Documents/env.txt takes precedence over dm/env.txt in the bundle (put there by build_ipa.sh's DM_ENV_FILE)
+     NSMutableArray<NSString *> *from_file = [NSMutableArray array];
+     for (NSString *ef in @[[doc stringByAppendingPathComponent:@"env.txt"], [[res stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"env.txt"]]) {
+@@ -92,6 +95,7 @@
+ @interface App : UIResponder <UIApplicationDelegate>
+ @end
+ @implementation App
++- (void)applicationDidReceiveMemoryWarning:(UIApplication *)app { void dm_gfx_memory_pressure(void); dm_gfx_memory_pressure(); }
+ - (UISceneConfiguration *)application:(UIApplication *)a configurationForConnectingSceneSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
+     return [[UISceneConfiguration alloc] initWithName:@"Default" sessionRole:s.role];
+ }
+@@ -104,11 +108,14 @@
+ @implementation SceneDelegate
+ - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)o {
+     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
+-    self.window.rootViewController = front_ios_root();
++    __weak SceneDelegate *weakSelf = self;
++    self.window.rootViewController = dm_launch_settings_controller(^{
++        weakSelf.window.rootViewController = front_ios_root();
++    });
+     [self.window makeKeyAndVisible];
+ }
+ - (void)sceneWillResignActive:(UIScene *)s { front_ios_focus_event(0); }
+-- (void)sceneDidEnterBackground:(UIScene *)s { front_ios_focus_event(1); }
++- (void)sceneDidEnterBackground:(UIScene *)s { void dm_gfx_spatial_trim(void); dm_gfx_spatial_trim(); front_ios_focus_event(1); }
+ - (void)sceneWillEnterForeground:(UIScene *)s { front_ios_focus_event(2); }
+ - (void)sceneDidBecomeActive:(UIScene *)s { front_ios_focus_event(3); }
+ @end

@@ -4,6 +4,13 @@ Recorded on 2026-10-28. This report documents a local nxnative fork based on
 [xbunax/nxnative](https://github.com/xbunax/nxnative), whose upstream is
 [seedds/nxnative](https://github.com/seedds/nxnative).
 
+## Reproduction archive
+
+Read [the recovery and rebuild runbook](reproduction/REPRODUCE.md) first.
+It includes a source snapshot, eleven patches, overlays, Windows tools, tests,
+compiler fingerprints and source checksums. This is not a tested one-click
+clean-machine installer; see its explicit recovery gaps and external inputs.
+
 ## Result and scope
 
 After installing build **P5R-M1-fix2**, the device owner reported that the game

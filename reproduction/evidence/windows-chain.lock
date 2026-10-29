@@ -1,0 +1,9 @@
+# Translation chain tool fingerprints (written by dmsh_chain.py --update-lock; regenerate after changing tools and commit it)
+dmsh_xlate.dll	08d31903d666ea0c
+Ryujinx.Graphics.Shader.dll	eb315f0da558ca5a
+Ryujinx.Common.dll	b99db57e72c1fa16
+xlate_source	16bbef6c762573ee
+spirv-cross	missing
+metal_macosx	Apple metal version 32023.850 (metalfe-custom-windows)
+metal_iphoneos	Apple metal version 32023.850 (metalfe-custom-windows)
+windows_tools	{"metal.exe": "ca16c4c32cb8e404f7fee2b6a181ee748eee5367d904cb344163879412cd5b0a", "metallib.exe": "331b0f19bf8cab8a57801221cba6e2300ab17ae22248dd8f1bb703f1ff500acb", "spirv-cross.exe": "22e158489fb1838e8cfe6670b020f632284c8d602597045a97193b190ca1b638"}

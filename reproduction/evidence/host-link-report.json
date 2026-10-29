@@ -1,0 +1,53 @@
+{
+  "objects": 136,
+  "embed_bytes": 74990824,
+  "executable_bytes": 77219352,
+  "sha256": "e7d7caaee5f283123d622769f2ed546d49f366f99f778bf0ffe74f98c1451747",
+  "signed": false,
+  "ios_platform": 2,
+  "embedded_sections_verified": [
+    "__TEXT,__dmmainx0",
+    "__DMmainW,__img",
+    "__TEXT,__dmmainx1",
+    "__TEXT,__dmsubsdk0x0",
+    "__DMsubsdk0W,__img",
+    "__TEXT,__dmsubsdk0x1",
+    "__TEXT,__dmsdkx0",
+    "__DMsdkW,__img",
+    "__TEXT,__dmsdkx1"
+  ],
+  "segment_permissions": {
+    "__PAGEZERO": {
+      "maximum": 0,
+      "initial": 0
+    },
+    "__TEXT": {
+      "maximum": 5,
+      "initial": 5
+    },
+    "__DATA_CONST": {
+      "maximum": 3,
+      "initial": 3
+    },
+    "__DATA": {
+      "maximum": 3,
+      "initial": 3
+    },
+    "__DMmainW": {
+      "maximum": 3,
+      "initial": 3
+    },
+    "__DMsubsdk0W": {
+      "maximum": 3,
+      "initial": 3
+    },
+    "__DMsdkW": {
+      "maximum": 3,
+      "initial": 3
+    },
+    "__LINKEDIT": {
+      "maximum": 1,
+      "initial": 1
+    }
+  }
+}

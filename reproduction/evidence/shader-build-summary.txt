@@ -1,0 +1,17 @@
+shaders 30646: ok 30646, 
+shader cache: hit 0, rebuilt 30646
+  new key 29542
+  rule changed 1104
+variant cache: generated 27501, hit 27351, rebuilt 150, compiled 150
+shadow-input libraries (<key>_bv, dmsh_vin.py): 0 generated, 0 failed to compile, 0 not generated; 0 integer inputs shadowed, 0 of them with no other-sign shadow (attribute indices ran out)
+Metal cache: mac 29515 reused, 1131 compiled; ios 29511 reused, 1135 compiled
+shaders reading driver segments at run time 0 (c0 0, c2 0); reading what the replay layer cannot fill 0
+1D integer fetches read as 2D rows of 16384 texels (a texture buffer there is bound as rows, nvn_mtl.m tbuf_as_2d): 0 bindings in 0 shaders, 0 of them also size-queried
+shaders with a binding whose slot was not decoded 0, with an unrecognized binding kind 0 (loading them at run time prints [RED] lines)
+  queries without an answer 30640  not in the answer table, queries use defaults
+  queries without an answer     5  texture handle A
+  queries without an answer     1  texture handle 8
+  queries without an answer     1  texture handle C
+library stamp: game 01004B10157F2000, inputs a051ae51b653
+c1_full.tsv: not proven bounded: 0 shaders
+cb_extent.tsv: bounded uniform reads: 133271 slots; storage slots never written: 9; 30589 shaders

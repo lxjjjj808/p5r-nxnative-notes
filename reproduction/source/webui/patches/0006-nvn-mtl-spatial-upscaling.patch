@@ -1,0 +1,250 @@
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -15,6 +15,7 @@
+ #include <os/proc.h>   // os_proc_available_memory: for the memory readout line
+ #endif
+ #include "nvn_mtl.h"
++#include "nvn_spatial_size.h"
+ #include "nvn_obj.h"
+ #include "../tex/nvn_fmt_mtl.h"
+ #include "../tex/nvn_deswizzle.h"
+@@ -72,6 +73,7 @@
+ static id<MTLCommandQueue> g_q;
+ static id<MTL4CommandQueue> g_q4;
+ static int g_classic_ok, g_classic;   // mtl_device_classic was asked / the device has no Metal 4 and only the classic part started (mtl_init)
++#include "nvn_spatial.inc"
+ static dispatch_queue_t g_feedback_q;
+ static _Atomic uint32_t g_present_qos;
+ #define ALLOC_MAX 8
+@@ -84,7 +86,7 @@
+ static uint64_t g_vt_addr[31]; static uint32_t g_vt_valid;
+ static uint64_t g_vbuf_resolve, g_vbuf_reuse, g_vbuf_set, g_vbuf_skip;
+ static id<MTL4ArgumentTable> g_present_args;
+-static id<MTLBuffer> g_present_uv[3];
++static id<MTLBuffer> g_present_uv[6];
+ static uint64_t g_present_alloc_fence[3];
+ static pthread_mutex_t g_pq_mu = PTHREAD_MUTEX_INITIALIZER;
+ static pthread_cond_t g_pq_cv = PTHREAD_COND_INITIALIZER;
+@@ -353,6 +355,11 @@
+     for (int i = 0; i < 3; i++) {
+         g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * 8 options:MTLResourceStorageModeShared];
+         if (!g_present_uv[i]) MDIE("failed to create present UV buffer[%d]", i);
++        res_add(g_present_uv[i]);
++    }
++    for (int i = 3; i < 6; i++) {
++        g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * 8 options:MTLResourceStorageModeShared];
++        if (!g_present_uv[i]) MDIE("Spatial UV allocation failed");
+         res_add(g_present_uv[i]);
+     }
+     g_ev = [g_dev newSharedEvent];
+@@ -2824,7 +2831,7 @@
+ // ================= Shaders / descriptor pool / pipelines / draws =================
+ static pthread_mutex_t g_rmu = PTHREAD_MUTEX_INITIALIZER;
+ // ---------- Shader mapping table: Switch control section hash → PC metallib (produced by dm/gfx/tools/shader_map.py) ----------
+-static NSMutableDictionary<NSString *, NSArray *> *g_shmap;
++static NSMutableDictionary<NSString *, NSString *> *g_shmap;
+ static NSString *g_shmap_path, *g_msl_dir;
+ static NSString *exe_rel(const char *rel) {
+     char buf[4096]; uint32_t n = sizeof buf;
+@@ -2840,7 +2847,7 @@
+     NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+     if (!txt) MDIE("cannot read the shader map %s (DM_NVN_SHMAP can name another)", path.UTF8String);
+     g_shmap = [NSMutableDictionary dictionary];
+-    for (NSString *ln in [txt componentsSeparatedByString:@"\n"]) {
++    for (NSString *ln in [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+         if (!ln.length || [ln hasPrefix:@"#"] || [ln hasPrefix:@"package"]) continue;
+         NSArray *c = [ln componentsSeparatedByString:@"\t"];
+         if (c.count > 3) g_shmap[c[3]] = c[2];
+@@ -2850,10 +2857,13 @@
+     // Library directory = <DM_MSL_DIR or default cache>/b-<translation chain version>: the version comes from dm/gfx/nvn/dmsh_chain.h (tools/dmsh_chain.py), one for every game; a host built from an old source tree only accepts libraries of the old version
+     g_msl_dir = [NSString stringWithFormat:@"%@/b-%s", m ? @(m) : [NSString stringWithFormat:@"%s%s/build/cache/metal_shader_cache", getenv("DM_ROOT") ?: getenv("HOME"), getenv("DM_ROOT") ? "" : "/dm-work"], DMSH_CHAIN];
+     if (![NSFileManager.defaultManager fileExistsAtPath:g_msl_dir]) MLOG("[RED] shader library directory %s does not exist: translation chain version %s of this source tree has not been built yet (dm/gfx/tools/dmsh_build.py)", g_msl_dir.UTF8String, DMSH_CHAIN);
++    NSError *directory_error = nil;
++    NSArray *library_files = [NSFileManager.defaultManager contentsOfDirectoryAtPath:g_msl_dir error:&directory_error];
++    MLOG("installed shader resources: %lu directory entries, directory error=%s", (unsigned long)library_files.count, directory_error ? directory_error.localizedDescription.UTF8String : "none");
+     // The library's stamp (inputs.tsv, written by a full dmsh_build.py run): the game and the digest of the profile inputs it was built from. The chain version is the same for every
+     // game and every state of a profile's tables, so the stamp is what ties c1_full.tsv / cb_extent.tsv to these libraries: each names the inputs of the library it was made from
+     NSString *stamp = [NSString stringWithContentsOfFile:[g_msl_dir stringByAppendingPathComponent:@"inputs.tsv"] encoding:NSUTF8StringEncoding error:nil], *st_game = nil, *st_inputs = nil;
+-    for (NSString *ln in [stamp componentsSeparatedByString:@"\n"]) {
++    for (NSString *ln in [stamp componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+         NSArray *c = [ln componentsSeparatedByString:@"\t"];
+         if (c.count == 2 && [c[0] isEqual:@"game"]) st_game = c[1]; else if (c.count == 2 && [c[0] isEqual:@"inputs"]) st_inputs = c[1];
+     }
+@@ -2862,21 +2872,21 @@
+     else MLOG("shader library stamp: game %s, inputs %s", st_game.UTF8String, st_inputs.UTF8String);
+     NSString *cp = [[path stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"c1_full.tsv"];   // Same directory as the mapping table (Mac: dm/games/<id>; iOS: dm/ inside the App, copied along by build_ipa.sh)
+     NSString *ct = cp ? [NSString stringWithContentsOfFile:cp encoding:NSUTF8StringEncoding error:nil] : nil;
+-    NSString *head = ct ? [[ct componentsSeparatedByString:@"\n"] firstObject] : nil;
++    NSString *head = ct ? [[ct componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet] firstObject] : nil;
+     NSString *want = [NSString stringWithFormat:@"# chain b-%s inputs %@ ", DMSH_CHAIN, st_inputs ?: @"-"];   // a library without a stamp matches no table
+     if (!head || ![head hasPrefix:want]) {
+         MLOG("[RED] c1_full.tsv is stale or missing (its header must name this library's chain and inputs; a full dmsh_build.py run makes it); every c1 gets its own 64 KiB");
+     } else {
+         g_c1_full_valid = 1; g_c1_full = [NSMutableSet set];
+-        for (NSString *line in [ct componentsSeparatedByString:@"\n"]) if (line.length && ![line hasPrefix:@"#"]) [g_c1_full addObject:[line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]];
++        for (NSString *line in [ct componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) if (line.length && ![line hasPrefix:@"#"]) [g_c1_full addObject:[line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]];
+     }
+     {   // cb_extent.tsv (tools/cb_extent.py), beside c1_full.tsv: without it a uniform block updated in part inside a pass is copied whole, up to 64 KB (ubp_get)
+         NSString *xp = [[path stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"cb_extent.tsv"];
+         NSString *xt = [NSString stringWithContentsOfFile:xp encoding:NSUTF8StringEncoding error:nil];
+-        NSString *xh = xt ? [[xt componentsSeparatedByString:@"\n"] firstObject] : nil;
++        NSString *xh = xt ? [[xt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet] firstObject] : nil;
+         if (!xh || ![xh hasPrefix:want]) MLOG("cb_extent.tsv is stale or missing: uniform reads are taken to reach the whole binding");
+         else { NSMutableDictionary *d = [NSMutableDictionary dictionary];
+-            for (NSString *line in [xt componentsSeparatedByString:@"\n"]) { if (!line.length || [line hasPrefix:@"#"]) continue;
++            for (NSString *line in [xt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) { if (!line.length || [line hasPrefix:@"#"]) continue;
+                 NSRange t = [line rangeOfString:@"\t"]; if (t.location != NSNotFound) d[[line substringToIndex:t.location]] = [line substringFromIndex:t.location + 1]; }
+             g_cb_ext = d; MLOG("uniform read extents: %lu shaders (cb_extent.tsv)", (unsigned long)d.count); }
+     }
+@@ -2991,7 +3001,7 @@
+         NSString *seed = g_shmap_path ? [g_shmap_path.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"pso_manifest.tsv"] : nil;
+         NSMutableArray<NSString *> *paths = [NSMutableArray array]; if (seed) [paths addObject:seed]; NSString *user = pso_user_path(); if (user) [paths addObject:user];
+         for (NSString *path in paths) { NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+-            for (NSString *old in [txt componentsSeparatedByString:@"\n"]) if (old.length && ![old hasPrefix:@"#"]) [g_pso_user_seen addObject:old]; }
++            for (NSString *old in [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) if (old.length && ![old hasPrefix:@"#"]) [g_pso_user_seen addObject:old]; }
+     }
+     size_t ll = strlen(line); NSString *s = [[NSString alloc] initWithBytes:line length:ll && line[ll - 1] == '\n' ? ll - 1 : ll encoding:NSUTF8StringEncoding];   // Compared with the manifest file line by line (without the newline)
+     if (!s || [g_pso_user_seen containsObject:s]) return;
+@@ -3001,8 +3011,14 @@
+ // while the default soft limit of an iOS process is 256; new shaders created in other acts raise it further). Here the file is mapped into memory and closed immediately, and the library is built from the in-memory data; the mapping is released when the library's data object is freed
+ static __thread int t_lib_layer;
+ static id<MTLLibrary> lib_from_file(NSString *path, NSError **err) {
+-    int fd = open(path.fileSystemRepresentation, O_RDONLY); struct stat st;
+-    if (fd < 0 || fstat(fd, &st) || st.st_size <= 0) { if (fd >= 0) close(fd); if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"cannot open %@", path]}]; return nil; }
++    int fd = open(path.fileSystemRepresentation, O_RDONLY); struct stat st = {0};
++    int saved_errno = fd < 0 ? errno : fstat(fd, &st) ? errno : st.st_size <= 0 ? EINVAL : 0;
++    if (saved_errno) {
++        if (fd >= 0) close(fd);
++        BOOL exists = [NSFileManager.defaultManager fileExistsAtPath:path];
++        MLOG("[RED] shader resource open failed: errno=%d (%s), exists=%d, size=%lld, path=%s", saved_errno, strerror(saved_errno), exists, (long long)st.st_size, path.UTF8String);
++        if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:saved_errno userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"cannot open %@ (errno %d)", path, saved_errno]}]; return nil;
++    }
+     size_t len = (size_t)st.st_size; void *m = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0); close(fd);
+     t_lib_layer = m != MAP_FAILED && memmem(m, len, "render_target_array_index", 25) != NULL;   // the library's functions use the layer: for a vertex library, its output (shader_load)
+     if (m == MAP_FAILED) { if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"mmap failed %@", path]}]; return nil; }
+@@ -3813,20 +3829,20 @@
+ // Other mismatches (integer input with a normalized / half format, float input with an integer format) cannot keep the bit pattern: report once and keep the format.
+ static MTLVertexFormat vfmt_for_ct(MTLVertexFormat f, int ct, int nvn_fmt) {
+     static const MTLVertexFormat U[] = { MTLVertexFormatUChar, MTLVertexFormatUChar2, MTLVertexFormatUChar3, MTLVertexFormatUChar4, MTLVertexFormatUShort, MTLVertexFormatUShort2, MTLVertexFormatUShort3, MTLVertexFormatUShort4, MTLVertexFormatUInt, MTLVertexFormatUInt2, MTLVertexFormatUInt3, MTLVertexFormatUInt4 };
+-    static const MTLVertexFormat I[] = { MTLVertexFormatChar, MTLVertexFormatChar2, MTLVertexFormatChar3, MTLVertexFormatChar4, MTLVertexFormatShort, MTLVertexFormatShort2, MTLVertexFormatShort3, MTLVertexFormatShort4, MTLVertexFormatInt, MTLVertexFormatInt2, MTLVertexFormatInt3, MTLVertexFormatInt4 };
++    static const MTLVertexFormat signed_formats[] = { MTLVertexFormatChar, MTLVertexFormatChar2, MTLVertexFormatChar3, MTLVertexFormatChar4, MTLVertexFormatShort, MTLVertexFormatShort2, MTLVertexFormatShort3, MTLVertexFormatShort4, MTLVertexFormatInt, MTLVertexFormatInt2, MTLVertexFormatInt3, MTLVertexFormatInt4 };
+     static const MTLVertexFormat F[] = { MTLVertexFormatFloat, MTLVertexFormatFloat2, MTLVertexFormatFloat3, MTLVertexFormatFloat4 };
+     int iu = -1, ii = -1, iff = -1;
+-    for (int i = 0; i < 12; i++) { if (U[i] == f) iu = i; if (I[i] == f) ii = i; }
++    for (int i = 0; i < 12; i++) { if (U[i] == f) iu = i; if (signed_formats[i] == f) ii = i; }
+     for (int i = 0; i < 4; i++) if (F[i] == f) iff = i;
+     if (ct == NVN_CT_UINT) { if (iu >= 0) return f; if (ii >= 0) return U[ii]; if (iff >= 0) return U[8 + iff]; }
+-    else if (ct == NVN_CT_INT) { if (ii >= 0) return f; if (iu >= 0) return I[iu]; if (iff >= 0) return I[8 + iff]; }
++    else if (ct == NVN_CT_INT) { if (ii >= 0) return f; if (iu >= 0) return signed_formats[iu]; if (iff >= 0) return signed_formats[8 + iff]; }
+     else { if (iu < 0 && ii < 0) return f; if ((iu >= 8 && iu < 12) || (ii >= 8 && ii < 12)) return F[(iu >= 8 ? iu : ii) - 8]; }   // 32-bit integers into a float input: the same bits as floats
+     // An integer input fed a normalized, half or packed format: Maxwell would hand the shader the bits of the converted float, which Metal cannot, and Metal refuses the whole pipeline
+     // ("Vertex attribute … of type uint4 cannot be read using MTLAttributeFormatHalf2"). Read the same bytes as integers of the same layout instead, so the pipeline exists and the draw is kept.
+     // Fire Emblem: Three Houses: KTGL's character shaders read attribute 5 as integer bits (skinning data) and static meshes bind a Half2 there; with the pipeline refused, the characters'
+     // shading draws were dropped and only black silhouettes remained (gender choice, in the prologue)
+     if (ct == NVN_CT_UINT || ct == NVN_CT_INT) {
+-        static const struct { MTLVertexFormat f; uint8_t u; } P[] = {   // u = index into U / I with the same component size and count
++        static const struct { MTLVertexFormat f; uint8_t u; } P[] = {   // u = index into U / signed_formats with the same component size and count
+             { MTLVertexFormatUCharNormalized, 0 }, { MTLVertexFormatCharNormalized, 0 }, { MTLVertexFormatUChar2Normalized, 1 }, { MTLVertexFormatChar2Normalized, 1 },
+             { MTLVertexFormatUChar3Normalized, 2 }, { MTLVertexFormatChar3Normalized, 2 }, { MTLVertexFormatUChar4Normalized, 3 }, { MTLVertexFormatChar4Normalized, 3 }, { MTLVertexFormatUChar4Normalized_BGRA, 3 },
+             { MTLVertexFormatUShortNormalized, 4 }, { MTLVertexFormatShortNormalized, 4 }, { MTLVertexFormatHalf, 4 }, { MTLVertexFormatUShort2Normalized, 5 }, { MTLVertexFormatShort2Normalized, 5 }, { MTLVertexFormatHalf2, 5 },
+@@ -3835,7 +3851,7 @@
+         };
+         for (unsigned i = 0; i < sizeof P / sizeof *P; i++) if (P[i].f == f) {
+             RED_ONCE(91, "vertex attribute format %#x feeds a %s input: Metal does not allow it and the conversion slots are full; the raw bytes are read with the integer format of the same layout (the bit pattern differs from Maxwell's converted one)", nvn_fmt, ct == NVN_CT_UINT ? "uint" : "int");
+-            return ct == NVN_CT_UINT ? U[P[i].u] : I[P[i].u];
++            return ct == NVN_CT_UINT ? U[P[i].u] : signed_formats[P[i].u];
+         }
+     }
+     RED_ONCE(66, "vertex attribute format %#x does not match shader input type %s; the bit pattern is not preserved (original format kept)", nvn_fmt, ct == NVN_CT_UINT ? "uint" : ct == NVN_CT_INT ? "int" : "float");
+@@ -4100,8 +4116,8 @@
+     int ib, is, in = vconv_i2f(f, &ib, &is);   // integers read as floats: the integer format of the same layout (the pipeline reads vconv_bind's conversion)
+     if (in) {
+         static const MTLVertexFormat U[3][4] = { { MTLVertexFormatUChar, MTLVertexFormatUChar2, MTLVertexFormatUChar3, MTLVertexFormatUChar4 }, { MTLVertexFormatUShort, MTLVertexFormatUShort2, MTLVertexFormatUShort3, MTLVertexFormatUShort4 }, { MTLVertexFormatUInt, MTLVertexFormatUInt2, MTLVertexFormatUInt3, MTLVertexFormatUInt4 } };
+-        static const MTLVertexFormat I[3][4] = { { MTLVertexFormatChar, MTLVertexFormatChar2, MTLVertexFormatChar3, MTLVertexFormatChar4 }, { MTLVertexFormatShort, MTLVertexFormatShort2, MTLVertexFormatShort3, MTLVertexFormatShort4 }, { MTLVertexFormatInt, MTLVertexFormatInt2, MTLVertexFormatInt3, MTLVertexFormatInt4 } };
+-        return (is ? I : U)[ib == 8 ? 0 : ib == 16 ? 1 : 2][in - 1];
++        static const MTLVertexFormat signed_formats[3][4] = { { MTLVertexFormatChar, MTLVertexFormatChar2, MTLVertexFormatChar3, MTLVertexFormatChar4 }, { MTLVertexFormatShort, MTLVertexFormatShort2, MTLVertexFormatShort3, MTLVertexFormatShort4 }, { MTLVertexFormatInt, MTLVertexFormatInt2, MTLVertexFormatInt3, MTLVertexFormatInt4 } };
++        return (is ? signed_formats : U)[ib == 8 ? 0 : ib == 16 ? 1 : 2][in - 1];
+     }
+     return MTLVertexFormatInvalid;
+ }
+@@ -4367,9 +4383,9 @@
+         for (NSString *path in paths) {
+             NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+             if (!txt) { MLOG("[RED] cannot read prewarm list: %s", path.UTF8String); continue; }
+-            { unsigned long nl = 0; for (NSString *l in [txt componentsSeparatedByString:@"\n"]) nl += l.length && ![l hasPrefix:@"#"];
++            { unsigned long nl = 0; for (NSString *l in [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) nl += l.length && ![l hasPrefix:@"#"];
+               MLOG("pipeline prewarm list %s: %lu lines", path.UTF8String, nl); }   // Diagnostics: how many lines each manifest gave (when a device warms up 0, shows which one was missing)
+-            for (NSString *line in [txt componentsSeparatedByString:@"\n"]) {
++            for (NSString *line in [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+                 if (!line.length || [line hasPrefix:@"#"] || [seen containsObject:line]) continue;
+                 [seen addObject:line];
+                 NSArray<NSString *> *c = [line componentsSeparatedByString:@"\t"];
+@@ -7837,7 +7853,7 @@
+ static struct { uint64_t frame; char path[1024]; } g_shotq[SHOTQ_MAX]; static int g_nshotq;
+ static pthread_mutex_t g_shotq_mu = PTHREAD_MUTEX_INITIALIZER;
+ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4]);
+-static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], int uv_i);
++static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], int uv_i, int orient, id<MTLFence> wait, id<MTLFence> signal);
+ // Game picture needed by the whole-window screenshot (front end window_shot; no longer does drawViewHierarchy on a Metal layer with the display link attached): at the next present, the present thread draws the same frame
+ // with the same encoding as the present (present_encode) into an offscreen texture of the same size as the swapchain, and after the GPU finishes hands out a CGImage in the completion callback (the callback does not block the present). Guarded by g_shotq_mu
+ static void (^g_grab_cb)(CGImageRef img);
+@@ -8174,7 +8190,7 @@
+     [en endEncoding];
+     return 1;
+ }
+-static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], int uv_i) {
++static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], int uv_i, int orient, id<MTLFence> wait, id<MTLFence> signal) {
+     NSUInteger cx = 0, cy = 0, cw = src.width, ch = src.height;
+     if (crop && (crop[2] || crop[3])) {
+         if (crop[0] < 0 || crop[1] < 0 || crop[2] <= 0 || crop[3] <= 0 ||
+@@ -8196,16 +8212,18 @@
+     id<MTL4RenderCommandEncoder> en = [cb renderCommandEncoderWithDescriptor:rp];
+     if (!en) { MLOG("[RED] failed to create the M4 present render encoder"); return 0; }
+     [en barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
++    if (wait) [en waitForFence:wait beforeEncoderStages:MTLStageFragment];
+     [en setArgumentTable:g_present_args atStages:MTLRenderStageFragment];
+     [g_present_args setTexture:present_raw_src(src).gpuResourceID atIndex:0];
+     [g_present_args setSamplerState:g_blit_samp.gpuResourceID atIndex:0];
+     float *uv = g_present_uv[uv_i].contents;
+     uv[0] = (float)cx / src.width; uv[1] = (float)cy / src.height; uv[2] = (float)cw / src.width; uv[3] = (float)ch / src.height;
+     uv[4] = (cx + 0.5f) / src.width; uv[5] = (cy + 0.5f) / src.height; uv[6] = (cx + cw - 0.5f) / src.width; uv[7] = (cy + ch - 0.5f) / src.height;
+-    if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { uv[1] += uv[3]; uv[3] = -uv[3]; }   // lower-left origin: the window image is stored bottom-up
++    if (orient && atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { uv[1] += uv[3]; uv[3] = -uv[3]; }   // lower-left origin: the window image is stored bottom-up
+     [g_present_args setAddress:g_present_uv[uv_i].gpuAddress atIndex:0];
+     [en setViewport:vp]; [en setRenderPipelineState:g_blit_pso];
+     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
++    if (signal) [en updateFence:signal afterEncoderStages:MTLStageFragment];
+     m4_end(en);
+     return 1;
+ }
+@@ -8284,11 +8302,29 @@
+     [g_q4 waitForDrawable:dr];
+     id<MTL4CommandBuffer> cb = g_present_cb[alloc_i];
+     [cb beginCommandBufferWithAllocator:g_present_alloc4[alloc_i]];
+-    if (!present_encode_m4(cb, src, dr.texture, crop, alloc_i)) { [cb endCommandBuffer]; [g_q4 signalDrawable:dr]; return 0; }
++    NSUInteger sw = crop && crop[2] > 0 ? (NSUInteger)crop[2] : src.width;
++    NSUInteger sh = crop && crop[3] > 0 ? (NSUInteger)crop[3] : src.height;
++    BOOL sdr = src.pixelFormat == MTLPixelFormatBGRA8Unorm || src.pixelFormat == MTLPixelFormatBGRA8Unorm_sRGB ||
++        src.pixelFormat == MTLPixelFormatRGBA8Unorm || src.pixelFormat == MTLPixelFormatRGBA8Unorm_sRGB;
++    unsigned ow, oh;
++    dm_spatial_output_size((unsigned)sw, (unsigned)sh, (unsigned)dr.texture.width, (unsigned)dr.texture.height,
++        dm_spatial_height(getenv("DM_METALFX_OUTPUT_HEIGHT")), &ow, &oh);
++    NvSpatial *fx = sdr ? spatial_prepare(alloc_i, sw, sh, ow, oh) : nil;
++    int encoded;
++    if (fx) {
++        encoded = present_encode_m4(cb, src, fx->input, crop, alloc_i + 3, 1, nil, fx->fence);
++        if (encoded) {
++            [fx->scaler encodeToCommandBuffer:cb];
++            encoded = present_encode_m4(cb, fx->output, dr.texture, NULL, alloc_i, 0, fx->fence, nil);
++        }
++    } else encoded = present_encode_m4(cb, src, dr.texture, crop, alloc_i, 1, nil, nil);
++    if (!encoded) { [cb endCommandBuffer]; [g_q4 signalDrawable:dr]; return 0; }
++    if (fx) atomic_store(&fx->busy, 1);
+     [cb endCommandBuffer];
+     MTL4CommitOptions *o = [MTL4CommitOptions new];
+     [o addFeedbackHandler:^(id<MTL4CommitFeedback> f) {
+         if (f.error) MLOG("[RED] display command buffer error: %s", f.error.description.UTF8String);
++        if (fx) atomic_store(&fx->busy, 0);
+         pthread_mutex_lock(&g_pq_mu); if (ticket > g_pq_done) g_pq_done = ticket; g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
+     }];
+     id<MTL4CommandBuffer> buffers[] = {cb};
