@@ -4,6 +4,16 @@ Recorded on 2026-10-28. This report documents a local nxnative fork based on
 [xbunax/nxnative](https://github.com/xbunax/nxnative), whose upstream is
 [seedds/nxnative](https://github.com/seedds/nxnative).
 
+## Latest build shared by the owner
+
+- File: `P5R-M1-fix2.ipa` (final M1 build).
+- [Baidu Netdisk download](https://pan.baidu.com/s/1Nzd4eHpYvr2CkyEozBdqxQ?pwd=rvky)
+- Extraction code: `rvky`
+- Target tested by the owner: iPad Air 5 (M1).
+
+The owner supplied this external link on 2026-10-29. The shared file has not
+been independently downloaded or compared with the local verified artifact.
+
 ## Reproduction archive
 
 Read [the recovery and rebuild runbook](reproduction/REPRODUCE.md) first.
@@ -236,4 +246,5 @@ that this fork includes every upstream fix:
    save/load, suspend/resume and memory behavior separately.
 
 This report contains no game executables, extracted shader bytes, game assets,
-decryption keys, proprietary SDK files, IPA downloads or raw device logs.
+decryption keys, proprietary SDK files or raw device logs. The IPA link above
+points to an external file shared by the owner.
